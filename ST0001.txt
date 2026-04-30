@@ -1,0 +1,1477 @@
+      ****************************************************************
+      *
+      *  NAME........: ST0001           REF.NO:
+      *
+      *  DESCRIPTION.: Account Transaction Limit Validation
+      *
+      *  DATE CREATED: 29/05/2019
+      *
+      *  AUTHOR......: YCL
+      *
+      *  COMMIT......: STMAST
+      *
+      ****************************************************************
+      *
+      * ST0001    IS A PART OF SILVERLAKE INTEGRATED BANKING SYSTEM
+      *    COPYRIGHT 2019 BY SILVERLAKE SYSTEM SDN BHD
+      *    KUALA LUMPUR, MALAYSIA.
+      *
+      ****************************************************************
+      * Important Notes :
+      *
+      ****************************************************************
+      *
+      * MODIFICATION LOGS:
+      * DD/MM/YYYY  INIT MOD.#   DESCRIPTION
+      * 07/11/2019  YCL  YCL01   ALM8348RD: Change yearly limit validation
+      *                          priority at first
+      * 04/09/2023  OHC  OHC01   ALM00029697: Add new errDesc for non-css
+      *                          limit
+      * 13/09/2023  YCL  YCL02   ALM00029697: Fix error description mapping
+      *                          logic to display complete error description
+      * 09/04/2024  MBZ  MBZ01   ALM00033624: Add the function of user-defined
+      *                          error description
+      * 21/08/2024  OHC  OHC02   BQD TechOne-162760:
+      *                          - Fix fmt RBK001 bugs found during testing
+      *                          (1) Abort from RBK001 loop once hit 1st limit err
+      *                          (2) Cater to check all available combination of
+      *                              K6TGRP and K6CHNGRP to lookup STPAR6
+      *                              (avoid miss out checking those using wildcard
+      *                               K3STYP/K4CHNCOD after loop exact STYP/CHNCOD)
+      *                          (3) When mode=P, STLOG.SLALWOVR is logged wrongly.
+      *                              Need to get VP5ALWOVR from STMAST again.
+      ****************************************************************
+     F*---PARM
+     FSTPAR2    IF   E           K DISK    PREFIX(P2:2) USROPN
+     FSTPAR3    IF   E           K DISK    PREFIX(P3:2) USROPN
+     FSTPAR4    IF   E           K DISK    PREFIX(P4:2) USROPN
+     FSTPAR5    IF   E           K DISK    PREFIX(P5:2) USROPN
+     FSTPAR6    IF   E           K DISK    PREFIX(P6:2) USROPN
+mbz01FSTPAR7    IF   E           K DISK    PREFIX(P7:2) USROPN
+     FSSPART    IF   E           K DISK    USROPN
+     FSSEDT     IF   E           K DISK    USROPN
+      *---DAT
+     FSTMAST    UF A E           K DISK    PREFIX(M_:2)
+     F                                     COMMIT
+     FSTMASTL0  IF   E           K DISK    PREFIX(M0:2)
+     F                                     RENAME(RSTMAST:RSTMAST0)
+     FSTPSNL    IF   E           K DISK    PREFIX(S_:2)
+     F*---LOG
+     FSTLOG     UF A E           K DISK
+     FJHSCTL    UF A E           K DISK
+     D*********************************************************
+     D* COPY BOOK                                             *
+     D*********************************************************
+     D/COPY QRPGLESRC,¥DBCSD
+      *
+     D*********************************************************
+     D* DATA STRUCTURE DEFINITION                             *
+     D*********************************************************
+      * PROGRAM STATUS DATA STRUCTURE
+     D PSSTSDS        SDS                  NOOPT
+     D  PSPGM                  1     10
+     D  PSSTS                 11     15
+     D  PSSRCSEQ              21     28
+     D  PSPARM                37     39  0
+     D  PSMSGTYP              40     42
+     D  PSMSGNBR              43     46
+     D  PSCODE               209    213
+     D  PSJOBN               244    253
+     D  PSUSRN               254    263
+     D  PSJOB#               264    269
+     D  PSJOBD               270    275
+     D  PSPGMDAT             276    281
+     D  PSPGMTIM             282    287
+      * RBK001 FORMAT DATA STRUCTURE
+     DDSRBK001         DS
+     D P_MODE                        10A
+     D P_RRN                               LIKE(SLRRN)
+     D P_ACCNO                       19S 0
+     D P_ACCTYP                       1A
+     D P_ACCCUR                       4A
+     D P_DIMEN                       50A
+     D P_TRXSRC                       3A
+     D P_APPCDE                       2A
+     D P_TLTX                         4S 0
+     D P_STYP                         4A
+     D P_APPLINE                      2S 0
+     D P_TRXCDE                       3S 0
+     D P_DORC                         1A
+     D P_ECFLAG                       1A
+     D P_AMT                         19S 2
+     D P_ERRCDE                       3S 0
+     D P_ERRDESC                     30A
+     D P_ABRULE                       5A
+     D P_ABDYCNT                      9S 0
+     D P_ABDYAMT                     17S 2
+     D P_ABMTCNT                      9S 0
+     D P_ABMTAMT                     17S 2
+     D P_ABQTCNT                      9S 0
+     D P_ABQTAMT                     17S 2
+     D P_ABYRCNT                      9S 0
+     D P_ABYRAMT                     17S 2
+      *
+      * RBK002 FORMAT DATA STRUCTURE
+     DDSRBK002         DS
+     D P2_MODE                       10A
+     D P2_RRN                        22A
+     D P2_ACCNO                      19S 0
+     D P2_ACCTYP                      1A
+     D P2_ACCCUR                      4A
+     D P2_RULE                        5A
+     D P2_ERRCDE                      3S 0
+     D P2_ERRDESC                    30A
+     D P2_AACNT01                     9S 0
+     D P2_AAAMT01                    17S 2
+     D P2_AACNT02                     9S 0
+     D P2_AAAMT02                    17S 2
+     D P2_AACNT03                     9S 0
+     D P2_AAAMT03                    17S 2
+     D P2_AACNT04                     9S 0
+     D P2_AAAMT04                    17S 2
+      *
+     D                 DS
+     D KYSTPAR2                1      5
+     D  K2TGRP                        5    OVERLAY(KYSTPAR2:01)
+      *
+     D                 DS
+     D KYSTPAR3                1     14
+     D  K3APPL                        2    OVERLAY(KYSTPAR3:01)
+     D  K3TLTX                        4P 0 OVERLAY(KYSTPAR3:03)
+     D  K3STYP                        4    OVERLAY(KYSTPAR3:06)
+     D  K3LINE                        2P 0 OVERLAY(KYSTPAR3:10)
+     D  K3TRANCD                      3P 0 OVERLAY(KYSTPAR3:12)
+     D  K3DORC                        1    OVERLAY(KYSTPAR3:14)
+      *
+     D                 DS
+     D KYSTPAR4                1      3
+     D  K4CHNCOD                      3    OVERLAY(KYSTPAR4:01)
+      *
+     D                 DS
+     D KYSTPAR5                1      9
+     D  K5RULE                        5    OVERLAY(KYSTPAR5:01)
+     D  K5CURR                        4    OVERLAY(KYSTPAR5:06)
+      *
+     D                 DS
+     D KYSTPAR6                1     15
+     D  K6TGRP                        5A   OVERLAY(KYSTPAR6:01)
+     D  K6CHNGRP                     10A   OVERLAY(KYSTPAR6:06)
+      *
+mbz01D                 DS
+mbz01D KYSTPAR7                1      8
+mbz01D  K7RULE                        5A   OVERLAY(KYSTPAR7:01)
+mbz01D  K7ERRN                        3S 0 OVERLAY(KYSTPAR7:06)
+mbz01 *
+     D XRRN                                LIKE(SLRRN)
+     D XRRN2                               LIKE(SLRRN)
+      *
+     D                 DS
+     D KYACCUM                 1     29
+     D  KYACCNO                      19S 0 OVERLAY(KYACCUM:01)
+     D  KYACCTYP                      1A   OVERLAY(KYACCUM:20)
+     D  KYACCCUR                      4A   OVERLAY(KYACCUM:21)
+     D  KYRULE                        5A   OVERLAY(KYACCUM:25)
+      * STPAR5
+     D VSTPAR5DS       DS
+     D  VP5ALWOVR                          LIKE(P5ALWOVR)
+     D  VP5MAXAMT                          LIKE(P5MAXAMT)
+     D  VP5MINAMT                          LIKE(P5MINAMT)
+     D  VP5CNT01                           LIKE(P5CNT01)
+     D  VP5AMT01                           LIKE(P5AMT01)
+     D  VP5CNT02                           LIKE(P5CNT02)
+     D  VP5AMT02                           LIKE(P5AMT02)
+     D  VP5CNT03                           LIKE(P5CNT03)
+     D  VP5AMT03                           LIKE(P5AMT03)
+     D  VP5CNT04                           LIKE(P5CNT04)
+     D  VP5AMT04                           LIKE(P5AMT04)
+      *
+     D XINIT           S              1A
+     D XCNT            S              4  0
+      *
+     D ARPAR2KY        S              5    DIM(9999)
+     D ARP2TGRP        S                   LIKE(P2TGRP)
+     D                                     DIM(9999)
+      *
+     D ARPAR3KY        S             14    DIM(9999)
+     D ARP3TGRP        S                   LIKE(P3TGRP)
+     D                                     DIM(9999)
+     D ARP3SIGN        S                   LIKE(P3SIGN)
+     D                                     DIM(9999)
+      *
+     D ARPAR5KY        S              9    DIM(9999)
+     D ARP5ALWOVR      S                   LIKE(P5ALWOVR)
+     D                                     DIM(9999)
+     D ARP5MAXAMT      S                   LIKE(P5MAXAMT)
+     D                                     DIM(9999)
+     D ARP5MINAMT      S                   LIKE(P5MINAMT)
+     D                                     DIM(9999)
+     D ARP5CNT01       S                   LIKE(P5CNT01)
+     D                                     DIM(9999)
+     D ARP5AMT01       S                   LIKE(P5AMT01)
+     D                                     DIM(9999)
+     D ARP5CNT02       S                   LIKE(P5CNT02)
+     D                                     DIM(9999)
+     D ARP5AMT02       S                   LIKE(P5AMT02)
+     D                                     DIM(9999)
+     D ARP5CNT03       S                   LIKE(P5CNT03)
+     D                                     DIM(9999)
+     D ARP5AMT03       S                   LIKE(P5AMT03)
+     D                                     DIM(9999)
+     D ARP5CNT04       S                   LIKE(P5CNT04)
+     D                                     DIM(9999)
+     D ARP5AMT04       S                   LIKE(P5AMT04)
+     D                                     DIM(9999)
+      *
+     D ARPAR4KY        S              3    DIM(9999)
+     D ARP4CHNG        S                   LIKE(P4CHNGRP)
+     D                                     DIM(9999)
+      *
+     D ARPAR6KY        S             15    DIM(9999)
+     D ARPAR6K2        S                   LIKE(P6DIMEN)
+     D                                     DIM(9999)
+     D ARP6RULE        S                   LIKE(P6RULE)
+     D                                     DIM(9999)
+     D ARP6DDSC        S                   LIKE(P6DDSC)
+     D                                     DIM(9999)
+mbz01 *
+mbz01D ARPAR7KY        S              8    DIM(9999)
+mbz01D ARP7ERRD        S                   LIKE(P7ERRD)
+mbz01D                                     DIM(9999)
+      *
+     D ARSTMASTKY      S             29    DIM(100)
+     D ARACCUAMT       S             19  2 DIM(100)
+     D ARACCUCNT       S              9  0 DIM(100)
+      *
+     D ARSTMSTKYU      S             29    DIM(100)
+      *
+     D XMODULE         S              1A
+     D XRETURN         S              6A
+     D X1              S              5  0
+     D X2              S              5  0
+     D X3              S              5  0
+     D X4              S              5  0
+     D X5              S              5  0
+     D X6              S              5  0
+     D X7              S              5  0
+     D XX1             S              5  0 INZ(*ZEROS)
+     D XX2             S              5  0 INZ(*ZEROS)
+     D XSTLOGNUM       S                   LIKE(STKEYW)
+     D                                     INZ('STLOGNNUM')
+     D XMAXRCD         S              9  0 INZ(*ZEROS)
+     D XCURRCDNUM      S              9  0 INZ(*ZEROS)
+     D XLASTNUM        S              9  0 INZ(*ZEROS)
+     D XMATCH          S              1    INZ(*BLANKS)
+     D XMXSTR          S              2  0 INZ(50)
+     D XMST            S              1    DIM(50)
+     D XRST            S              1    DIM(50)
+     D ERD             S             30    DIM(999)
+     D P_FMTNAM        S             10A
+     D P_FMTDTA        S            500A
+     D XSIGN           S                   LIKE(P3SIGN)
+     D XPOSITIVE       S              1A   INZ('+')
+     D XNEGATIVE       S              1A   INZ('-')
+     D XYEARCHG        S              1A
+     D XQTRCHG         S              1A
+     D XMONTHCHG       S              1A
+     D XDAYCHG         S              1A
+      *
+     D XCVTISO         S               D   DATFMT(*ISO)
+     D XDATEI          S              8  0
+     D XDATEDS         S              8
+     D XDIMEN          S                   LIKE(P_DIMEN)
+      *
+     D VISODATE        DS
+     D  VISOYY                        4
+     D  VISOF1                        1
+     D  VISOMM                        2
+     D  VISOF2                        1
+     D  VISODD                        2
+      *
+     D XSYSTEMDATE     S              8  0 INZ(*ZEROS)
+     D XDATESTR        S               D   INZ
+      *
+     D VBUSSDATE       DS
+     D  VBUSSYEAR                     4S 0
+     D  VBUSSMONTH                    2S 0
+     D  VBUSSDAY                      2S 0
+      *
+     D XYEAR           S              4S 0
+     D XMONTH          S              2S 0
+      *
+      * KEY FIELD
+     D K_ACCT          S                   LIKE(M_ACCT)
+     D K_ATYP          S                   LIKE(M_ATYP)
+     D K_CURR          S                   LIKE(M_CURR)
+     D K_RULE          S                   LIKE(M_RULE)
+      *
+      * STMAST TEMP VARIABLES
+     D DSSTMAST        DS
+     D  VSTCNT01               1      5P 0
+     D  VSTAMT01               6     14P 2
+     D  VSTCNT02              15     19P 0
+     D  VSTAMT02              20     28P 2
+     D  VSTCNT03              29     33P 0
+     D  VSTAMT03              34     42P 2
+     D  VSTCNT04              43     47P 0
+     D  VSTAMT04              48     56P 2
+     D  VSTDATE               57     61P 0
+      *
+     D XB4DATE         S                   LIKE(M_DATE)
+     D XB4CNT01        S                   LIKE(M_CNT01)
+     D XB4AMT01        S                   LIKE(M_AMT01)
+     D XB4CNT02        S                   LIKE(M_CNT02)
+     D XB4AMT02        S                   LIKE(M_AMT02)
+     D XB4CNT03        S                   LIKE(M_CNT03)
+     D XB4AMT03        S                   LIKE(M_AMT03)
+     D XB4CNT04        S                   LIKE(M_CNT04)
+     D XB4AMT04        S                   LIKE(M_AMT04)
+      *
+     D XACCUCNT        S                   LIKE(SLCNT01A)
+     D XACCUAMT        S                   LIKE(P_AMT)
+     D XMULTLIN        S              1A
+      *
+     D XERR01          S             30A
+     D XERR02          S             30A
+     D XPOS            S              5  0
+     D XCHINESE        S            100A
+     D XFMTRSP         S              1A
+YCL02D XTMPERRD        S             50A
+      *
+OHC02D ALLSTYP         S              1A   INZ(*OFF)
+OHC02D ALLCHNCOD       S              1A   INZ(*OFF)
+OHC02 *
+      *********************************************************
+      * PARAMETER LIST DEFINITION                             *
+      *********************************************************
+     C     *ENTRY        PLIST
+     C                   PARM                    P_FMTNAM
+     C                   PARM                    P_FMTDTA
+      *
+      *********************************************************
+      * KEY LIST DEFINITION                                   *
+      *********************************************************
+     C     KYSTMAST      KLIST
+     C                   KFLD                    K_ACCT
+     C                   KFLD                    K_ATYP
+     C                   KFLD                    K_CURR
+     C                   KFLD                    K_RULE
+      *
+     C     KYSTMAST0     KLIST
+     C                   KFLD                    K_RULE
+     C                   KFLD                    K_CURR
+      *
+     C     KYSTPSNL      KLIST
+     C                   KFLD                    K_ACCT
+     C                   KFLD                    K_ATYP
+     C                   KFLD                    K_CURR
+     C                   KFLD                    K_RULE
+      * CACHE PARAMETERS
+     C                   EXSR      SRINIT
+      *
+     C                   UNLOCK    STMAST
+     C                   UNLOCK    STLOG
+     C                   UNLOCK    JHSCTL
+      *
+     C                   IF        P_FMTNAM = 'RBK001'
+     C                   MOVEL(P)  P_FMTDTA      DSRBK001
+     C                   MOVEL(P)  P_APPCDE      K3APPL
+     C                   Z-ADD     P_TLTX        K3TLTX
+     C                   MOVEL(P)  P_STYP        K3STYP
+     C                   Z-ADD     P_APPLINE     K3LINE
+     C                   Z-ADD     P_TRXCDE      K3TRANCD
+     C                   MOVEL(P)  P_DORC        K3DORC
+     C                   MOVEL(P)  P_TRXSRC      K4CHNCOD
+OHC02C                   CLEAR                   P_ERRCDE
+      * RETRIEVE TRAN GROUP
+     C                   Z-ADD     1             X1
+     C     KYSTPAR3      LOOKUP    ARPAR3KY(X1)                           90
+      * IF NO FOUND, TRY USE DEFAULT WILDCARD SUBTYPE VALUE
+     C                   IF        *IN90 = *OFF
+OHC02C                   MOVEL(P)  *ON           ALLSTYP
+     C                   MOVEL     *ALL'-'       K3STYP
+     C                   Z-ADD     1             X1
+     C     KYSTPAR3      LOOKUP    ARPAR3KY(X1)                           90
+OHC02C                   ELSE
+OHC02C                   MOVEL(P)  *OFF          ALLSTYP
+     C                   ENDIF
+     C                   DOW       *IN90 = *ON
+     C                   MOVEL(P)  ARP3TGRP(X1)  KYSTPAR2
+     C                   MOVEL(P)  ARP3SIGN(X1)  XSIGN
+     C                   Z-ADD     1             X2
+     C     KYSTPAR2      LOOKUP    ARPAR2KY(X2)                           90
+     C                   DOW       *IN90 = *ON
+OHC02 * FOR EVERY TRX GRP, START 1ST CHECK USING EXACT CHANNEL CODE
+OHC02C                   MOVEL(P)  P_TRXSRC      K4CHNCOD
+      * CHANNEL GROUP
+     C                   Z-ADD     1             X3
+     C     KYSTPAR4      LOOKUP    ARPAR4KY(X3)                           90
+      * IF NO FOUND, TRY USE WILDCARD CHANNEL CODE
+     C                   IF        *IN90 = *OFF
+OHC02C                   MOVEL(P)  *ON           ALLCHNCOD
+     C                   MOVEL     *ALL'-'       K4CHNCOD
+     C                   Z-ADD     1             X3
+     C     KYSTPAR4      LOOKUP    ARPAR4KY(X3)                           90
+OHC02C                   ELSE
+OHC02C                   MOVEL(P)  *OFF          ALLCHNCOD
+     C                   ENDIF
+     C                   DOW       *IN90 = *ON
+     C                   EXSR      SRPROC
+OHC02C     P_ERRCDE      CABGT     *ZEROS        SRMAIN09
+     C                   ADD       1             X3
+     C     KYSTPAR4      LOOKUP    ARPAR4KY(X3)                           90
+OHC02 * AFTER LOOP WITH EXACT CHANNEL CODE, CHECK ALSO WILDCARD CHANNEL CODE
+OHC02C                   IF        *IN90 = *OFF AND ALLCHNCOD = *OFF
+OHC02C                             AND K4CHNCOD <> *ALL'-'
+OHC02C                   MOVEL(P)  *ON           ALLCHNCOD
+OHC02C                   MOVEL(P)  *ALL'-'       K4CHNCOD
+OHC02C                   Z-ADD     1             X3
+OHC02C     KYSTPAR4      LOOKUP    ARPAR4KY(X3)                           90
+OHC02C                   ENDIF
+     C                   ENDDO
+      *
+     C                   ADD       1             X2
+     C     KYSTPAR2      LOOKUP    ARPAR2KY(X2)                           90
+     C                   ENDDO
+     C                   ADD       1             X1
+     C     KYSTPAR3      LOOKUP    ARPAR3KY(X1)                           90
+OHC02 * AFTER LOOP WITH EXACT SUB TYPE, CHECK ALSO WILDCARD SUB TYPE
+OHC02C                   IF        *IN90 = *OFF AND ALLSTYP = *OFF
+OHC02C                             AND K3STYP <> *ALL'-'
+OHC02C                   MOVEL(P)  *ON           ALLSTYP
+OHC02C                   MOVEL(P)  *ALL'-'       K3STYP
+OHC02C                   Z-ADD     1             X1
+OHC02C     KYSTPAR3      LOOKUP    ARPAR3KY(X1)                           90
+OHC02C                   ENDIF
+     C                   ENDDO
+      *
+     C                   ELSEIF    P_FMTNAM = 'RBK002'
+     C                   MOVEL(P)  P_FMTDTA      DSRBK002
+     C                   EXSR      SRINQLMT
+     C                   EXSR      SRWRTLOG
+     C     P2_ERRCDE     CABGT     *ZEROS        SRMAIN09
+     C                   ELSE
+      * REPORT ERROR
+     C                   ENDIF
+      *
+     C     SRMAIN09      TAG
+      * RETURN RESPONSE
+     C                   IF        P_FMTNAM = 'RBK001'
+     C                   MOVEL(P)  DSRBK001      P_FMTDTA
+     C                   ELSEIF    P_FMTNAM = 'RBK002'
+     C                   MOVEL(P)  DSRBK002      P_FMTDTA
+     C                   ENDIF
+      *
+     C                   RETURN
+      *********************************************************
+      * SRPROC - STPAR6, STPAR4 SUBROUTINE                    *
+      *********************************************************
+     C     SRPROC        BEGSR
+      *
+     C                   MOVEL(P)  ARP3TGRP(X1)  K6TGRP
+     C                   MOVEL(P)  ARP4CHNG(X3)  K6CHNGRP
+     C                   Z-ADD     1             X4
+     C     KYSTPAR6      LOOKUP    ARPAR6KY(X4)                           90
+     C                   DOW       *IN90 = *ON
+OHC02C                             AND P_ERRCDE = *ZEROS
+     C                   MOVEA     ARPAR6K2(X4)  XRST
+     C                   EXSR      SRDIMEN
+     C                   IF        XMATCH = *ON
+     C                   MOVEL(P)  ARP6RULE(X4)  K5RULE
+     C                   MOVEL(P)  P_ACCCUR      K5CURR
+     C                   IF        P_MODE = 'V'
+      * GET STPAR5 DATA
+     C                   Z-ADD     1             X5
+     C     KYSTPAR5      LOOKUP    ARPAR5KY(X5)                           90
+     C                   IF        *IN90 = *ON
+     C                   MOVEL(P)  ARP5ALWOVR(X5)VP5ALWOVR
+     C                   Z-ADD     ARP5MAXAMT(X5)VP5MAXAMT
+     C                   Z-ADD     ARP5MINAMT(X5)VP5MINAMT
+     C                   Z-ADD     ARP5CNT01(X5) VP5CNT01
+     C                   Z-ADD     ARP5AMT01(X5) VP5AMT01
+     C                   Z-ADD     ARP5CNT02(X5) VP5CNT02
+     C                   Z-ADD     ARP5AMT02(X5) VP5AMT02
+     C                   Z-ADD     ARP5CNT03(X5) VP5CNT03
+     C                   Z-ADD     ARP5AMT03(X5) VP5AMT03
+     C                   Z-ADD     ARP5CNT04(X5) VP5CNT04
+     C                   Z-ADD     ARP5AMT04(X5) VP5AMT04
+      * LOAD PERSONALISED LIMIT INFO (IF GOT)
+     C                   IF        VP5ALWOVR = 'Y'
+     C                   Z-ADD     P_ACCNO       K_ACCT
+     C                   MOVEL(P)  P_ACCTYP      K_ATYP
+     C                   MOVEL(P)  P_ACCCUR      K_CURR
+     C                   MOVEL(P)  K5RULE        K_RULE
+     C     KYSTPSNL      CHAIN     RSTPSNL
+     C                   IF        %FOUND(STPSNL)
+     C                   Z-ADD     S_MAXAMT      VP5MAXAMT
+     C                   Z-ADD     S_MINAMT      VP5MINAMT
+     C                   Z-ADD     S_CNT01       VP5CNT01
+     C                   Z-ADD     S_AMT01       VP5AMT01
+     C                   Z-ADD     S_CNT02       VP5CNT02
+     C                   Z-ADD     S_AMT02       VP5AMT02
+     C                   Z-ADD     S_CNT03       VP5CNT03
+     C                   Z-ADD     S_AMT03       VP5AMT03
+     C                   Z-ADD     S_CNT04       VP5CNT04
+     C                   Z-ADD     S_AMT04       VP5AMT04
+     C                   ENDIF
+     C                   ENDIF
+     C                   EXSR      SRVLDRULE
+     C                   EXSR      SRWRTLOG
+     C     P_ERRCDE      CABGT     *ZEROS        SRPROC09
+     C                   ENDIF
+     C                   ELSEIF    P_MODE = 'P'
+OHC02 * GET VP5ALWOVR from STPAR5
+OHC02C                   Z-ADD     1             X5
+OHC02C     KYSTPAR5      LOOKUP    ARPAR5KY(X5)                           90
+OHC02C                   IF        *IN90 = *ON
+OHC02C                   MOVEL(P)  ARP5ALWOVR(X5)VP5ALWOVR
+OHC02C                   ENDIF
+     C                   EXSR      SRUPDSTMAST
+     C                   EXSR      SRWRTLOG
+     C                   ENDIF
+     C                   ENDIF
+     C                   ADD       1             X4
+     C     KYSTPAR6      LOOKUP    ARPAR6KY(X4)                           90
+     C                   ENDDO
+      *
+     C     SRPROC09      TAG
+     C                   ENDSR
+      *********************************************************
+      * SRVLDRULE - RULE VALIDATION SUBROUTINE                *
+      *********************************************************
+     C     SRVLDRULE     BEGSR
+      * ONLY VERIFY LIMIT
+     C                   CLEAR                   DSSTMAST
+     C                   CLEAR     *ALL          RSTMAST
+      * BY ACCOUNT
+     C                   Z-ADD     P_ACCNO       K_ACCT
+     C                   MOVEL(P)  P_ACCTYP      K_ATYP
+     C                   MOVEL(P)  P_ACCCUR      K_CURR
+     C                   MOVEL(P)  K5RULE        K_RULE
+     C     KYSTMAST      CHAIN(N)  RSTMAST
+     C                   IF        %FOUND(STMAST)
+     C                   Z-ADD     M_CNT01       VSTCNT01
+     C                   Z-ADD     M_AMT01       VSTAMT01
+     C                   Z-ADD     M_CNT02       VSTCNT02
+     C                   Z-ADD     M_AMT02       VSTAMT02
+     C                   Z-ADD     M_CNT03       VSTCNT03
+     C                   Z-ADD     M_AMT03       VSTAMT03
+     C                   Z-ADD     M_CNT04       VSTCNT04
+     C                   Z-ADD     M_AMT04       VSTAMT04
+     C                   Z-ADD     M_DATE        VSTDATE
+      *
+     C                   EXSR      SRDURCHG
+     C                   ENDIF
+      * WHEN THERE ARE MULTIPLE LINE WITH SAME ACCOUNT HIT SAME RULE IN A TRAN
+      * ACCUMULATE TRANSACTION AMOUNT FOR MULTIPLE LINES
+     C                   IF        P_RRN = XRRN
+      * IF SAME TRAN, SAME ACC, SAME RULE EXIST, ADD TRAN AMT
+     C                   Z-ADD     P_ACCNO       KYACCNO
+     C                   MOVEL     P_ACCTYP      KYACCTYP
+     C                   MOVEL     P_ACCCUR      KYACCCUR
+     C                   MOVEL     K5RULE        KYRULE
+     C                   Z-ADD     1             X7
+     C     KYACCUM       LOOKUP    ARSTMASTKY(X7)                         88
+     C                   IF        *IN88 = *ON
+     C                   Z-ADD     ARACCUCNT(X7) XACCUCNT
+     C                   Z-ADD     ARACCUAMT(X7) XACCUAMT
+     C                   IF        XSIGN = XNEGATIVE
+     C                             OR (XSIGN = XPOSITIVE AND P_ECFLAG = 'Y')
+     C                   SUB       P_AMT         ARACCUAMT(X7)
+     C                   ELSE
+     C                   ADD       P_AMT         ARACCUAMT(X7)
+     C                   ENDIF
+     C                   MOVEL     *ON           XMULTLIN
+     C                   ELSE
+      * IF SAME TRAN, NO FOUND FOR ACCT AND RULE, CREATE NEW RECORD
+     C                   Z-ADD     1             X7
+     C     *BLANKS       LOOKUP    ARSTMASTKY(X7)                         88
+     C                   MOVEL     KYACCUM       ARSTMASTKY(X7)
+     C                   Z-ADD     *ZEROS        XACCUCNT
+     C                   Z-ADD     *ZEROS        XACCUAMT
+     C                   IF        XSIGN = XNEGATIVE
+     C                             OR (XSIGN = XPOSITIVE AND P_ECFLAG = 'Y')
+     C                   Z-ADD     *ZEROS        ARACCUCNT(X7)
+     C                   Z-SUB     P_AMT         ARACCUAMT(X7)
+     C                   ELSE
+     C                   Z-ADD     1             ARACCUCNT(X7)
+     C                   Z-ADD     P_AMT         ARACCUAMT(X7)
+     C                   ENDIF
+     C                   MOVEL     *OFF          XMULTLIN
+     C                   ENDIF
+     C                   ELSE
+      * A NEW TRANSACTION, CLEAR PREVIOUS TRANSACTION VALUE
+     C                   MOVEL     P_RRN         XRRN
+     C                   CLEAR                   ARSTMASTKY
+     C                   CLEAR                   ARACCUCNT
+     C                   CLEAR                   ARACCUAMT
+     C                   Z-ADD     1             X7
+     C                   Z-ADD     P_ACCNO       KYACCNO
+     C                   MOVEL     P_ACCTYP      KYACCTYP
+     C                   MOVEL     P_ACCCUR      KYACCCUR
+     C                   MOVEL     K5RULE        KYRULE
+     C                   MOVEL     KYACCUM       ARSTMASTKY(X7)
+     C                   Z-ADD     *ZEROS        XACCUCNT
+     C                   Z-ADD     *ZEROS        XACCUAMT
+     C                   IF        XSIGN = XNEGATIVE
+     C                             OR (XSIGN = XPOSITIVE AND P_ECFLAG = 'Y')
+     C                   Z-ADD     *ZEROS        ARACCUCNT(X7)
+     C                   Z-SUB     P_AMT         ARACCUAMT(X7)
+     C                   ELSE
+     C                   Z-ADD     1             ARACCUCNT(X7)
+     C                   Z-ADD     P_AMT         ARACCUAMT(X7)
+     C                   ENDIF
+     C                   MOVEL     *OFF          XMULTLIN
+     C                   ENDIF
+     C                   ADD       XACCUAMT      VSTAMT01
+     C                   ADD       XACCUAMT      VSTAMT02
+     C                   ADD       XACCUAMT      VSTAMT03
+     C                   ADD       XACCUAMT      VSTAMT04
+     C                   EVAL      XB4CNT01 = VSTCNT01 + XACCUCNT
+     C                   Z-ADD     VSTAMT01      XB4AMT01
+     C                   EVAL      XB4CNT02 = VSTCNT02 + XACCUCNT
+     C                   Z-ADD     VSTAMT02      XB4AMT02
+     C                   EVAL      XB4CNT03 = VSTCNT03 + XACCUCNT
+     C                   Z-ADD     VSTAMT03      XB4AMT03
+     C                   EVAL      XB4CNT04 = VSTCNT04 + XACCUCNT
+     C                   Z-ADD     VSTAMT04      XB4AMT04
+     C                   EXSR      SRVRFACCLMT
+      *
+     C                   ENDSR
+      *********************************************************
+      * SRUPDSTMAST - UPDATE STMAST                           *
+      *********************************************************
+     C     SRUPDSTMAST   BEGSR
+      * WHEN THERE ARE MULTIPLE LINE WITH SAME ACCOUNT HIT SAME RULE IN A TRAN
+      * TRANSACTION COUNT ONLY ADD/MINUS ONE TIME
+     C                   IF        P_RRN = XRRN2
+      * IF SAME TRAN, SAME ACC, SAME RULE EXIST, SKIP TRAN COUNT
+     C                   Z-ADD     P_ACCNO       KYACCNO
+     C                   MOVEL     P_ACCTYP      KYACCTYP
+     C                   MOVEL     P_ACCCUR      KYACCCUR
+     C                   MOVEL     K5RULE        KYRULE
+     C                   Z-ADD     1             X7
+     C     KYACCUM       LOOKUP    ARSTMSTKYU(X7)                         88
+     C                   IF        *IN88 = *ON
+     C                   MOVEL     *ON           XMULTLIN
+     C                   ELSE
+      * IF SAME TRAN, NO FOUND FOR ACCT AND RULE, CREATE NEW RECORD
+      * ADD TRAN COUNT
+     C                   Z-ADD     1             X7
+     C     *BLANKS       LOOKUP    ARSTMSTKYU(X7)                         88
+     C                   MOVEL     KYACCUM       ARSTMSTKYU(X7)
+     C                   MOVEL     *OFF          XMULTLIN
+     C                   ENDIF
+     C                   ELSE
+      * A NEW TRANSACTION, CLEAR PREVIOUS TRANSACTION VALUE
+      * ADD TRAN COUNT
+     C                   MOVEL     P_RRN         XRRN2
+     C                   CLEAR                   ARSTMSTKYU
+     C                   Z-ADD     1             X7
+     C                   Z-ADD     P_ACCNO       KYACCNO
+     C                   MOVEL     P_ACCTYP      KYACCTYP
+     C                   MOVEL     P_ACCCUR      KYACCCUR
+     C                   MOVEL     K5RULE        KYRULE
+     C                   MOVEL     KYACCUM       ARSTMSTKYU(X7)
+     C                   MOVEL     *OFF          XMULTLIN
+     C                   ENDIF
+      *
+     C                   Z-ADD     P_ACCNO       K_ACCT
+     C                   MOVEL(P)  P_ACCTYP      K_ATYP
+     C                   MOVEL(P)  P_ACCCUR      K_CURR
+     C                   MOVEL(P)  K5RULE        K_RULE
+     C     KYSTMAST      CHAIN     RSTMAST
+     C                   IF        %FOUND(STMAST)
+     C                   EXSR      SRB4CHG
+     C                   Z-ADD     M_DATE        VSTDATE
+     C                   EXSR      SRDURCHG
+      *
+     C                   IF        XDAYCHG = *ON
+     C                   Z-ADD     *ZEROS        M_CNT01
+     C                   Z-ADD     *ZEROS        M_AMT01
+     C                   ENDIF
+      *
+     C                   IF        XMONTHCHG = *ON
+     C                   Z-ADD     *ZEROS        M_CNT02
+     C                   Z-ADD     *ZEROS        M_AMT02
+     C                   ENDIF
+      *
+     C                   IF        XQTRCHG = *ON
+     C                   Z-ADD     *ZEROS        M_CNT03
+     C                   Z-ADD     *ZEROS        M_AMT03
+     C                   ENDIF
+      *
+     C                   IF        XYEARCHG = *ON
+     C                   Z-ADD     *ZEROS        M_CNT04
+     C                   Z-ADD     *ZEROS        M_AMT04
+     C                   ENDIF
+      *
+     C                   IF        XSIGN = XNEGATIVE
+     C                             OR (XSIGN = XPOSITIVE AND P_ECFLAG = 'Y')
+     C                   IF        XMULTLIN = *OFF
+     C                   EVAL      M_CNT01 = M_CNT01 - 1
+     C                   EVAL      M_CNT02 = M_CNT02 - 1
+     C                   EVAL      M_CNT03 = M_CNT03 - 1
+     C                   EVAL      M_CNT04 = M_CNT04 - 1
+     C                   ENDIF
+     C                   EVAL      M_AMT01 = M_AMT01 - P_AMT
+     C                   EVAL      M_AMT02 = M_AMT02 - P_AMT
+     C                   EVAL      M_AMT03 = M_AMT03 - P_AMT
+     C                   EVAL      M_AMT04 = M_AMT04 - P_AMT
+      *
+     C                   IF        M_CNT01 < *ZEROS
+     C                   Z-ADD     *ZEROS        M_CNT01
+     C                   ENDIF
+     C                   IF        M_AMT01 < *ZEROS
+     C                   Z-ADD     *ZEROS        M_AMT01
+     C                   ENDIF
+      *
+     C                   IF        M_CNT02 < *ZEROS
+     C                   Z-ADD     *ZEROS        M_CNT02
+     C                   ENDIF
+     C                   IF        M_AMT02 < *ZEROS
+     C                   Z-ADD     *ZEROS        M_AMT02
+     C                   ENDIF
+      *
+     C                   IF        M_CNT03 < *ZEROS
+     C                   Z-ADD     *ZEROS        M_CNT03
+     C                   ENDIF
+     C                   IF        M_AMT03 < *ZEROS
+     C                   Z-ADD     *ZEROS        M_AMT03
+     C                   ENDIF
+      *
+     C                   IF        M_CNT04 < *ZEROS
+     C                   Z-ADD     *ZEROS        M_CNT04
+     C                   ENDIF
+     C                   IF        M_AMT04 < *ZEROS
+     C                   Z-ADD     *ZEROS        M_AMT04
+     C                   ENDIF
+      *
+     C                   ELSEIF    XSIGN = XPOSITIVE
+     C                             OR (XSIGN = XNEGATIVE AND P_ECFLAG = 'Y')
+     C                   IF        XMULTLIN = *OFF
+     C                   EVAL      M_CNT01 = M_CNT01 + 1
+     C                   EVAL      M_CNT02 = M_CNT02 + 1
+     C                   EVAL      M_CNT03 = M_CNT03 + 1
+     C                   EVAL      M_CNT04 = M_CNT04 + 1
+     C                   ENDIF
+     C                   EVAL      M_AMT01 = M_AMT01 + P_AMT
+     C                   EVAL      M_AMT02 = M_AMT02 + P_AMT
+     C                   EVAL      M_AMT03 = M_AMT03 + P_AMT
+     C                   EVAL      M_AMT04 = M_AMT04 + P_AMT
+     C                   ENDIF
+     C                   Z-ADD     XSYSTEMDATE   M_DATE
+     C                   UPDATE    RSTMAST
+      * WRITE
+     C                   ELSE
+     C                   CLEAR     *ALL          RSTMAST
+     C                   EXSR      SRB4CHG
+     C                   Z-ADD     P_ACCNO       M_ACCT
+     C                   MOVEL(P)  P_ACCTYP      M_ATYP
+     C                   MOVEL(P)  P_ACCCUR      M_CURR
+     C                   MOVEL(P)  K5RULE        M_RULE
+     C                   Z-ADD     XSYSTEMDATE   M_DATE
+     C                   IF        XSIGN = XNEGATIVE
+     C                             OR (XSIGN = XPOSITIVE AND P_ECFLAG = 'Y')
+     C                   Z-ADD     *ZEROS        M_CNT01
+     C                   Z-ADD     *ZEROS        M_AMT01
+     C                   Z-ADD     *ZEROS        M_CNT02
+     C                   Z-ADD     *ZEROS        M_AMT02
+     C                   Z-ADD     *ZEROS        M_CNT03
+     C                   Z-ADD     *ZEROS        M_AMT03
+     C                   Z-ADD     *ZEROS        M_CNT04
+     C                   Z-ADD     *ZEROS        M_AMT04
+     C                   ELSEIF    XSIGN = XPOSITIVE
+     C                             OR (XSIGN = XNEGATIVE AND P_ECFLAG = 'Y')
+     C                   Z-ADD     1             M_CNT01
+     C                   Z-ADD     P_AMT         M_AMT01
+     C                   Z-ADD     1             M_CNT02
+     C                   Z-ADD     P_AMT         M_AMT02
+     C                   Z-ADD     1             M_CNT03
+     C                   Z-ADD     P_AMT         M_AMT03
+     C                   Z-ADD     1             M_CNT04
+     C                   Z-ADD     P_AMT         M_AMT04
+     C                   ENDIF
+     C                   WRITE     RSTMAST
+     C                   ENDIF
+      *
+     C                   ENDSR
+      *********************************************************
+      * SRB4CHG - STORE STMAST BEFORE CHANGE VALUE            *
+      *********************************************************
+     C     SRB4CHG       BEGSR
+     C                   Z-ADD     M_DATE        XB4DATE
+     C                   Z-ADD     M_CNT01       XB4CNT01
+     C                   Z-ADD     M_AMT01       XB4AMT01
+     C                   Z-ADD     M_CNT02       XB4CNT02
+     C                   Z-ADD     M_AMT02       XB4AMT02
+     C                   Z-ADD     M_CNT03       XB4CNT03
+     C                   Z-ADD     M_AMT03       XB4AMT03
+     C                   Z-ADD     M_CNT04       XB4CNT04
+     C                   Z-ADD     M_AMT04       XB4AMT04
+     C                   ENDSR
+      *********************************************************
+      * SRDIMEN - DIMENSION FIELD CRITERIA SEARCHING          *
+      *********************************************************
+     C     SRDIMEN       BEGSR
+      *
+     C                   MOVEA     P_DIMEN       XMST
+     C                   Z-ADD     1             XX1
+     C                   Z-ADD     1             XX2
+     C                   MOVE      *ON           XMATCH
+     C                   DOW       XX2 <= XMXSTR AND XMATCH = *ON
+     C                   IF        (XRST(XX2)=XMST(XX2) OR XRST(XX2)='-')
+     C                   ADD       1             XX2
+     C                   ELSE
+     C                   MOVE      *OFF          XMATCH
+     C                   ENDIF
+     C                   ENDDO
+      *
+     C                   ENDSR
+      *********************************************************
+      * SRINIT - INITIAL SUBROUTINE                           *
+      *********************************************************
+     C     SRINIT        BEGSR
+      *
+     C                   IF        XINIT = *BLANKS
+     C                   EXSR      SRLDPRM
+     C                   MOVEL     *ON           XINIT
+     C                   ENDIF
+      * RESET INDICATOR
+     C                   MOVE      *OFF          XYEARCHG
+     C                   MOVE      *OFF          XQTRCHG
+     C                   MOVE      *OFF          XMONTHCHG
+     C                   MOVE      *OFF          XDAYCHG
+     C                   EXSR      SRSYSDTE
+      * MODULE INDICATOR
+     C                   MOVE      *ON           XMODULE
+      *
+     C                   ENDSR
+      *********************************************************
+      * SRSYSDATE - RETRIEVE SYSTEM DATE AND TIME             *
+      *********************************************************
+     C     SRSYSDTE      BEGSR
+     C                   TIME                    XCVTISO
+     C                   MOVE      XCVTISO       VISODATE
+     C                   EVAL      XDATEDS = VISOYY + VISOMM + VISODD
+     C                   MOVE      XDATEDS       XDATEI
+     C     *ISO          MOVE      XDATEI        XDATESTR
+     C                   MOVE      XDATESTR      XSYSTEMDATE
+     C                   ENDSR
+      *********************************************************
+      * SRDURCHG - DETERMINE DURATION CHANGE                  *
+      *********************************************************
+     C     SRDURCHG      BEGSR
+      * YEAR CHANGE, QUARTER CHANGE, MONTH CHANGE
+     C                   MOVE      VSTDATE       VBUSSDATE
+     C                   Z-ADD     VBUSSYEAR     XYEAR
+     C                   Z-ADD     VBUSSMONTH    XMONTH
+     C                   MOVE      XSYSTEMDATE   VBUSSDATE
+     C                   SELECT
+     C                   WHEN      VBUSSYEAR <> XYEAR
+     C                   MOVE      *ON           XYEARCHG
+     C                   MOVE      *ON           XQTRCHG
+     C                   MOVE      *ON           XMONTHCHG
+      *
+     C                   WHEN      VBUSSMONTH <= 3 AND XMONTH <= 3
+     C                   MOVE      *OFF          XQTRCHG
+     C                   IF        VBUSSMONTH <> XMONTH
+     C                   MOVE      *ON           XMONTHCHG
+     C                   ENDIF
+      *
+     C                   WHEN      (VBUSSMONTH >= 4 AND VBUSSMONTH <= 6) AND
+     C                             (XMONTH >= 4 AND XMONTH <= 6)
+     C                   MOVE      *OFF          XQTRCHG
+     C                   IF        VBUSSMONTH <> XMONTH
+     C                   MOVE      *ON           XMONTHCHG
+     C                   ENDIF
+      *
+     C                   WHEN      (VBUSSMONTH >= 7 AND VBUSSMONTH <= 9) AND
+     C                             (XMONTH >= 7 AND XMONTH <= 9)
+     C                   MOVE      *OFF          XQTRCHG
+     C                   IF        VBUSSMONTH <> XMONTH
+     C                   MOVE      *ON           XMONTHCHG
+     C                   ENDIF
+      *
+     C                   WHEN      (VBUSSMONTH >= 10 AND VBUSSMONTH <= 12) AND
+     C                             (XMONTH >= 10 AND XMONTH <= 12)
+     C                   MOVE      *OFF          XQTRCHG
+     C                   IF        VBUSSMONTH <> XMONTH
+     C                   MOVE      *ON           XMONTHCHG
+     C                   ENDIF
+      *
+     C                   OTHER
+     C                   MOVE      *ON           XQTRCHG
+     C                   MOVE      *ON           XMONTHCHG
+     C                   ENDSL
+      * DAY CHANGE
+     C                   IF        VSTDATE <> XSYSTEMDATE
+     C                   MOVE      *ON           XDAYCHG
+     C                   ENDIF
+      *
+     C                   IF        XDAYCHG = *ON
+     C                   Z-ADD     *ZEROS        VSTCNT01
+     C                   Z-ADD     *ZEROS        VSTAMT01
+     C                   ENDIF
+      *
+     C                   IF        XMONTHCHG = *ON
+     C                   Z-ADD     *ZEROS        VSTCNT02
+     C                   Z-ADD     *ZEROS        VSTAMT02
+     C                   ENDIF
+      *
+     C                   IF        XQTRCHG = *ON
+     C                   Z-ADD     *ZEROS        VSTCNT03
+     C                   Z-ADD     *ZEROS        VSTAMT03
+     C                   ENDIF
+      *
+     C                   IF        XYEARCHG = *ON
+     C                   Z-ADD     *ZEROS        VSTCNT04
+     C                   Z-ADD     *ZEROS        VSTAMT04
+     C                   ENDIF
+      *
+     C                   ENDSR
+      *********************************************************
+      * SRABRSPACC - RETURN AB RESPONSE DATA                  *
+      *********************************************************
+     C     SRABRSPACC    BEGSR
+     C                   MOVEL     *OFF          XFMTRSP
+YCL02C                   EVAL      XTMPERRD  = P_ERRDESC
+     C*YCL02             EVAL      XPOS = %SCAN('&1':P_ERRDESC)
+YCL02C                   EVAL      XPOS = %SCAN('&1':XTMPERRD)
+     C                   IF        XPOS > 0
+     C                   MOVEL     *ON           XFMTRSP
+     C*YCL02             EVAL      P_ERRDESC = %REPLACE(%TRIM(XERR01):P_ERRDESC:
+     C*YCL02                                   XPOS:2)
+YCL02C                   EVAL      XTMPERRD  = %REPLACE(%TRIM(XERR01):XTMPERRD:
+YCL02C                                         XPOS:2)
+     C                   ENDIF
+      *
+     C*YCL02             EVAL      XPOS = %SCAN('&2':P_ERRDESC)
+YCL02C                   EVAL      XPOS = %SCAN('&2':XTMPERRD)
+     C                   IF        XPOS > 0
+     C                   MOVEL     *ON           XFMTRSP
+     C*YCL02             EVAL      P_ERRDESC = %REPLACE(%TRIM(XERR02):P_ERRDESC:
+     C*YCL02                                   XPOS:2)
+YCL02C                   EVAL      XTMPERRD  = %REPLACE(%TRIM(XERR02):XTMPERRD:
+YCL02C                                         XPOS:2)
+     C                   ENDIF
+      *
+     C     LOOP          TAG
+     C*YCL02             EVAL      XPOS = %SCAN(X'0F0E':P_ERRDESC)
+YCL02C                   EVAL      XPOS = %SCAN(X'0F0E':XTMPERRD)
+     C                   IF        XPOS > 0
+     C*YCL02             EVAL      P_ERRDESC = %REPLACE('':P_ERRDESC:XPOS:2)
+YCL02C                   EVAL      XTMPERRD  = %REPLACE('':XTMPERRD:XPOS:2)
+     C                   GOTO      LOOP
+     C                   ENDIF
+YCL02C                   EVAL      P_ERRDESC = XTMPERRD
+      *
+     C                   IF        XFMTRSP = *ON
+     C                   EVAL      XCHINESE = P_ERRDESC
+     C                   EVAL      XLEN = %SIZE(XCHINESE)
+     C                   EXSR      ¥SHIFTIN
+     C                   EVAL      P_ERRDESC = XCHINESE
+     C                   ENDIF
+mbz01C                   MOVEL(P)  K5RULE        K7RULE
+mbz01C                   MOVEL(P)  P_ERRCDE      K7ERRN
+mbz01 * GET STPAR7 DATA
+mbz01C                   Z-ADD     1             X7
+mbz01C     KYSTPAR7      LOOKUP    ARPAR7KY(X7)                           90
+mbz01C                   IF        *IN90 = *ON
+mbz01C                   MOVEL(P)  ARP7ERRD(X7)  P_ERRDESC
+mbz01C                   ENDIF
+     C                   MOVEL(P)  K5RULE        P_ABRULE
+     C                   Z-ADD     M_CNT01       P_ABDYCNT
+     C                   Z-ADD     M_AMT01       P_ABDYAMT
+     C                   Z-ADD     M_CNT02       P_ABMTCNT
+     C                   Z-ADD     M_AMT02       P_ABMTAMT
+     C                   Z-ADD     M_CNT03       P_ABQTCNT
+     C                   Z-ADD     M_AMT03       P_ABQTAMT
+     C                   Z-ADD     M_CNT04       P_ABYRCNT
+     C                   Z-ADD     M_AMT04       P_ABYRAMT
+     C                   ENDSR
+      *********************************************************
+      * SRINQLMT - INQUIRY LIMIT                              *
+      *********************************************************
+     C     SRINQLMT      BEGSR
+     C                   CLEAR                   DSSTMAST
+      * BY ACCOUNT
+     C                   IF        P2_ACCNO <> *ZEROS
+     C                   Z-ADD     P2_ACCNO      K_ACCT
+     C                   MOVEL(P)  P2_ACCTYP     K_ATYP
+     C                   MOVEL(P)  P2_ACCCUR     K_CURR
+     C                   MOVEL(P)  P2_RULE       K_RULE
+     C     KYSTMAST      CHAIN(N)  RSTMAST
+     C                   IF        %FOUND(STMAST)
+     C                   Z-ADD     M_CNT01       VSTCNT01
+     C                   Z-ADD     M_AMT01       VSTAMT01
+     C                   Z-ADD     M_CNT02       VSTCNT02
+     C                   Z-ADD     M_AMT02       VSTAMT02
+     C                   Z-ADD     M_CNT03       VSTCNT03
+     C                   Z-ADD     M_AMT03       VSTAMT03
+     C                   Z-ADD     M_CNT04       VSTCNT04
+     C                   Z-ADD     M_AMT04       VSTAMT04
+     C                   Z-ADD     M_DATE        VSTDATE
+      *
+     C                   EXSR      SRDURCHG
+     C                   Z-ADD     VSTCNT01      P2_AACNT01
+     C                   Z-ADD     VSTAMT01      P2_AAAMT01
+     C                   Z-ADD     VSTCNT02      P2_AACNT02
+     C                   Z-ADD     VSTAMT02      P2_AAAMT02
+     C                   Z-ADD     VSTCNT03      P2_AACNT03
+     C                   Z-ADD     VSTAMT03      P2_AAAMT03
+     C                   Z-ADD     VSTCNT04      P2_AACNT04
+     C                   Z-ADD     VSTAMT04      P2_AAAMT04
+     C                   ELSE
+     C                   Z-ADD     021           P2_ERRCDE
+     C                   EVAL      P2_ERRDESC = '无记录'
+     C     P2_ERRCDE     CABGT     *ZEROS        SRINQLMT09
+     C                   ENDIF
+     C                   ENDIF
+     C     SRINQLMT09    TAG
+     C                   ENDSR
+      *********************************************************
+      * SRVRFACCLMT - VERIFY TRANSACTION LIMIT BY ACCOUNT     *
+      *********************************************************
+     C     SRVRFACCLMT   BEGSR
+      *
+     C                   IF        XSIGN = XNEGATIVE
+     C                             OR (XSIGN = XPOSITIVE AND P_ECFLAG = 'Y')
+     C                   EVAL      VSTCNT01 = VSTCNT01 - 1
+     C                   EVAL      VSTAMT01 = VSTAMT01 - P_AMT
+     C                   EVAL      VSTCNT02 = VSTCNT02 - 1
+     C                   EVAL      VSTAMT02 = VSTAMT02 - P_AMT
+     C                   EVAL      VSTCNT03 = VSTCNT03 - 1
+     C                   EVAL      VSTAMT03 = VSTAMT03 - P_AMT
+     C                   EVAL      VSTCNT04 = VSTCNT04 - 1
+     C                   EVAL      VSTAMT04 = VSTAMT04 - P_AMT
+      *
+     C                   IF        VSTCNT01 < *ZEROS
+     C                   Z-ADD     *ZEROS        VSTCNT01
+     C                   ENDIF
+     C                   IF        VSTAMT01 < *ZEROS
+     C                   Z-ADD     *ZEROS        VSTAMT01
+     C                   ENDIF
+      *
+     C                   IF        VSTCNT02 < *ZEROS
+     C                   Z-ADD     *ZEROS        VSTCNT02
+     C                   ENDIF
+     C                   IF        VSTAMT02 < *ZEROS
+     C                   Z-ADD     *ZEROS        VSTAMT02
+     C                   ENDIF
+      *
+     C                   IF        VSTCNT03 < *ZEROS
+     C                   Z-ADD     *ZEROS        VSTCNT03
+     C                   ENDIF
+     C                   IF        VSTAMT03 < *ZEROS
+     C                   Z-ADD     *ZEROS        VSTAMT03
+     C                   ENDIF
+      *
+     C                   IF        VSTCNT04 < *ZEROS
+     C                   Z-ADD     *ZEROS        VSTCNT04
+     C                   ENDIF
+     C                   IF        VSTAMT04 < *ZEROS
+     C                   Z-ADD     *ZEROS        VSTAMT04
+     C                   ENDIF
+      *
+     C                   ELSEIF    XSIGN = XPOSITIVE
+     C                             OR (XSIGN = XNEGATIVE AND P_ECFLAG = 'Y')
+     C                   EVAL      VSTCNT01 = VSTCNT01 + 1
+     C                   EVAL      VSTAMT01 = VSTAMT01 + P_AMT
+     C                   EVAL      VSTCNT02 = VSTCNT02 + 1
+     C                   EVAL      VSTAMT02 = VSTAMT02 + P_AMT
+     C                   EVAL      VSTCNT03 = VSTCNT03 + 1
+     C                   EVAL      VSTAMT03 = VSTAMT03 + P_AMT
+     C                   EVAL      VSTCNT04 = VSTCNT04 + 1
+     C                   EVAL      VSTAMT04 = VSTAMT04 + P_AMT
+     C                   ENDIF
+     C                   IF        %SUBST(P_DIMEN:1:1) = '1'
+     C                   EVAL      XERR01 = '1类账户'
+     C                   ELSEIF    %SUBST(P_DIMEN:1:1) = '2'
+     C                   EVAL      XERR01 = '2类账户'
+     C                   ELSE
+     C                   EVAL      XERR01 = '账户'
+     C                   ENDIF
+      *
+     C                   IF        P_DORC = 'D'
+OHC01C                   IF        %SUBST(P_DIMEN:1:1) = '1'
+OHC01C                   EVAL      XERR02 = '支出'
+OHC01C                   ELSE
+     C                   EVAL      XERR02 = '出账'
+OHC01C                   ENDIF
+     C                   ELSEIF    P_DORC = 'C'
+     C                   EVAL      XERR02 = '入账'
+     C                   ELSE
+     C                   EVAL      XERR02 = *BLANKS
+     C                   ENDIF
+      * VERIFY DAILY COUNT
+     C                   SELECT
+      *
+YCL01C                   WHEN      VSTCNT04 > VP5CNT04
+YCL01C                   Z-ADD     117           P_ERRCDE
+YCL01C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+YCL01C                   EXSR      SRABRSPACC
+YCL01 *
+YCL01C                   WHEN      VSTAMT04 > VP5AMT04
+YCL01C                   Z-ADD     118           P_ERRCDE
+YCL01C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+YCL01C                   EXSR      SRABRSPACC
+YCL01 *
+     C                   WHEN      VSTCNT01 > VP5CNT01
+     C                   Z-ADD     111           P_ERRCDE
+     C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C                   EXSR      SRABRSPACC
+      *
+     C                   WHEN      VSTAMT01 > VP5AMT01
+     C                   Z-ADD     112           P_ERRCDE
+     C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C                   EXSR      SRABRSPACC
+      *
+     C                   WHEN      VSTCNT02 > VP5CNT02
+     C                   Z-ADD     113           P_ERRCDE
+     C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C                   EXSR      SRABRSPACC
+      *
+     C                   WHEN      VSTAMT02 > VP5AMT02
+     C                   Z-ADD     114           P_ERRCDE
+     C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C                   EXSR      SRABRSPACC
+      *
+     C                   WHEN      VSTCNT03 > VP5CNT03
+     C                   Z-ADD     115           P_ERRCDE
+     C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C                   EXSR      SRABRSPACC
+      *
+     C                   WHEN      VSTAMT03 > VP5AMT03
+     C                   Z-ADD     116           P_ERRCDE
+     C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C                   EXSR      SRABRSPACC
+      *
+     C*YCL01             WHEN      VSTCNT04 > VP5CNT04
+     C*YCL01             Z-ADD     117           P_ERRCDE
+     C*YCL01             EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C*YCL01             EXSR      SRABRSPACC
+      *
+     C*YCL01             WHEN      VSTAMT04 > VP5AMT04
+     C*YCL01             Z-ADD     118           P_ERRCDE
+     C*YCL01             EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C*YCL01             EXSR      SRABRSPACC
+      *
+     C                   WHEN      P_AMT < VP5MINAMT
+     C                             AND P_ECFLAG <> 'Y'
+     C                   Z-ADD     119           P_ERRCDE
+     C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C                   EXSR      SRABRSPACC
+      *
+     C                   WHEN      P_AMT > VP5MAXAMT
+     C                             AND P_ECFLAG <> 'Y'
+     C                             AND VP5MAXAMT <> *ZEROS
+     C                   Z-ADD     120           P_ERRCDE
+     C                   EVAL      P_ERRDESC = ERD(P_ERRCDE)
+     C                   EXSR      SRABRSPACC
+     C                   ENDSL
+      *
+     C                   ENDSR
+      *********************************************************
+      * SRWRTLOG - WRITE LOG                                  *
+      *********************************************************
+     C     SRWRTLOG      BEGSR
+      * WRITE STLOG
+      * JHSCTL CHAIN WITH LOCK TO MAKE SURE SAME SEQ WILL NOT WRITE IN STLOG
+     C     'Q'           CHAIN     RJHSCTL
+     C                   IF        %FOUND(JHSCTL)
+     C                   MOVE      JSTSEQ        XLASTNUM
+     C                   IF        XLASTNUM < XMAXRCD
+     C     XLASTNUM      ADD       1             XCURRCDNUM
+     C                   ELSE
+     C                   Z-ADD     1             XCURRCDNUM
+     C                   ENDIF
+     C                   EVAL      JSTSEQ = XCURRCDNUM
+      * MOVE IN STLOG DATA
+     C     XCURRCDNUM    CHAIN     RSTLOG
+     C                   CLEAR     *ALL          RSTLOG
+     C                   Z-ADD     XCURRCDNUM    SLRCDNUM
+     C                   MOVEL     P_RRN         SLRRN
+     C                   MOVEL     P_FMTNAM      SLFMTNAM
+     C                   IF        P_FMTNAM = 'RBK001'
+     C                   MOVEL     P_MODE        SLMODE
+     C                   MOVEL     ARP6RULE(X4)  SLRULE
+     C                   Z-ADD     P_ACCNO       SLACCT
+     C                   MOVEL     P_ACCTYP      SLATYP
+     C                   MOVEL     P_ACCCUR      SLCURR
+     C                   MOVEL     P_ECFLAG      SLECFLAG
+     C                   Z-ADD     P_AMT         SLAMT
+     C                   Z-ADD     P_ERRCDE      SLRSPCDE
+     C                   MOVEL     P_ERRDESC     SLRSPDESC
+      *
+     C                   SELECT
+     C                   WHEN      P_MODE = 'V'
+      * AFTER ADD IN CURRENT TRAN AMT
+     C                   Z-ADD     XSYSTEMDATE   SLDATEA
+     C                   Z-ADD     VSTCNT01      SLCNT01A
+     C                   Z-ADD     VSTAMT01      SLAMT01A
+     C                   Z-ADD     VSTCNT02      SLCNT02A
+     C                   Z-ADD     VSTAMT02      SLAMT02A
+     C                   Z-ADD     VSTCNT03      SLCNT03A
+     C                   Z-ADD     VSTAMT03      SLAMT03A
+     C                   Z-ADD     VSTCNT04      SLCNT04A
+     C                   Z-ADD     VSTAMT04      SLAMT04A
+      * BEFORE ADD IN CURRENT TRAN AMT
+     C                   IF        XMULTLIN = *OFF
+     C                   Z-ADD     M_DATE        SLDATEB
+     C                   Z-ADD     M_CNT01       SLCNT01B
+     C                   Z-ADD     M_AMT01       SLAMT01B
+     C                   Z-ADD     M_CNT02       SLCNT02B
+     C                   Z-ADD     M_AMT02       SLAMT02B
+     C                   Z-ADD     M_CNT03       SLCNT03B
+     C                   Z-ADD     M_AMT03       SLAMT03B
+     C                   Z-ADD     M_CNT04       SLCNT04B
+     C                   Z-ADD     M_AMT04       SLAMT04B
+     C                   ELSE
+     C                   Z-ADD     XSYSTEMDATE   SLDATEB
+     C                   Z-ADD     XB4CNT01      SLCNT01B
+     C                   Z-ADD     XB4AMT01      SLAMT01B
+     C                   Z-ADD     XB4CNT02      SLCNT02B
+     C                   Z-ADD     XB4AMT02      SLAMT02B
+     C                   Z-ADD     XB4CNT03      SLCNT03B
+     C                   Z-ADD     XB4AMT03      SLAMT03B
+     C                   Z-ADD     XB4CNT04      SLCNT04B
+     C                   Z-ADD     XB4AMT04      SLAMT04B
+     C                   ENDIF
+     C                   MOVEL     VP5ALWOVR     SLALWOVR
+      *
+     C                   WHEN      P_MODE = 'P'
+      * AFTER ADD IN CURRENT TRAN AMT
+     C                   Z-ADD     M_DATE        SLDATEA
+     C                   Z-ADD     M_CNT01       SLCNT01A
+     C                   Z-ADD     M_AMT01       SLAMT01A
+     C                   Z-ADD     M_CNT02       SLCNT02A
+     C                   Z-ADD     M_AMT02       SLAMT02A
+     C                   Z-ADD     M_CNT03       SLCNT03A
+     C                   Z-ADD     M_AMT03       SLAMT03A
+     C                   Z-ADD     M_CNT04       SLCNT04A
+     C                   Z-ADD     M_AMT04       SLAMT04A
+      * BEFORE ADD IN CURRENT TRAN AMT
+     C                   Z-ADD     XB4DATE       SLDATEB
+     C                   Z-ADD     XB4CNT01      SLCNT01B
+     C                   Z-ADD     XB4AMT01      SLAMT01B
+     C                   Z-ADD     XB4CNT02      SLCNT02B
+     C                   Z-ADD     XB4AMT02      SLAMT02B
+     C                   Z-ADD     XB4CNT03      SLCNT03B
+     C                   Z-ADD     XB4AMT03      SLAMT03B
+     C                   Z-ADD     XB4CNT04      SLCNT04B
+     C                   Z-ADD     XB4AMT04      SLAMT04B
+     C                   MOVEL     VP5ALWOVR     SLALWOVR
+     C                   ENDSL
+     C                   MOVEL     P_DIMEN       SLDIMEN
+     C                   MOVEL     ARP4CHNG(X3)  SLCHNGRP
+     C                   MOVEL     P_TRXSRC      SLCHNCOD
+     C                   MOVEL     ARP3TGRP(X1)  SLTGRP
+     C                   MOVEL     P_APPCDE      SLAPPL
+     C                   Z-ADD     P_TLTX        SLTLTX
+     C                   MOVEL     P_STYP        SLSTYP
+     C                   MOVEL     P_APPLINE     SLLINE
+     C                   MOVEL     P_TRXCDE      SLTRANCD
+     C                   MOVEL     P_DORC        SLDORC
+     C                   MOVEL     ARP3SIGN(X1)  SLSIGN
+      *
+     C                   ELSEIF    P_FMTNAM = 'RBK002'
+     C                   MOVEL     P2_MODE       SLMODE
+     C                   MOVEL     P2_RULE       SLRULE
+     C                   Z-ADD     P2_ACCNO      SLACCT
+     C                   MOVEL     P2_ACCTYP     SLATYP
+     C                   MOVEL     P2_ACCCUR     SLCURR
+     C                   Z-ADD     P2_ERRCDE     SLRSPCDE
+     C                   MOVEL     P2_ERRDESC    SLRSPDESC
+     C                   Z-ADD     VSTDATE       SLDATEA
+     C                   Z-ADD     P2_AACNT01    SLCNT01A
+     C                   Z-ADD     P2_AAAMT01    SLAMT01A
+     C                   Z-ADD     P2_AACNT02    SLCNT02A
+     C                   Z-ADD     P2_AAAMT02    SLAMT02A
+     C                   Z-ADD     P2_AACNT03    SLCNT03A
+     C                   Z-ADD     P2_AAAMT03    SLAMT03A
+     C                   Z-ADD     P2_AACNT04    SLCNT04A
+     C                   Z-ADD     P2_AAAMT04    SLAMT04A
+     C                   ENDIF
+     C                   TIME                    SLTMSTM
+     C                   MOVEL     PSJOBN        SLJOBNAM
+     C                   MOVEL     PSUSRN        SLJOBUSER
+     C                   MOVEL     PSJOB#        SLJOBNUM
+      *
+     C                   IF        %FOUND(STLOG)
+     C                   UPDATE    RSTLOG
+     C                   ELSE
+     C                   WRITE     RSTLOG
+     C                   ENDIF
+      *
+     C                   UPDATE    RJHSCTL
+     C                   ENDIF
+      *
+     C                   ENDSR
+      *********************************************************
+      * SRLDPRM - LOADING PARAMETER TO MEMORY                 *
+      *********************************************************
+     C     SRLDPRM       BEGSR
+     C                   MOVEA     *HIVAL        ARPAR2KY
+     C                   MOVEA     *HIVAL        ARPAR3KY
+     C                   MOVEA     *HIVAL        ARPAR4KY
+     C                   MOVEA     *HIVAL        ARPAR5KY
+     C                   MOVEA     *HIVAL        ARPAR6KY
+      * LOAD TRAN GROUP PARAMETER
+     C                   IF        NOT %OPEN(STPAR2)
+     C                   OPEN      STPAR2
+     C                   ENDIF
+      *
+     C                   Z-ADD     *ZEROS        XCNT
+     C     *LOVAL        SETLL     RSTPAR2
+     C                   READ      RSTPAR2
+     C                   DOW       NOT %EOF
+     C                   ADD       1             XCNT
+     C                   MOVEL(P)  P2TGRP        K2TGRP
+     C                   MOVEL(P)  KYSTPAR2      ARPAR2KY(XCNT)
+     C                   READ      RSTPAR2
+     C                   ENDDO
+     C                   CLOSE     STPAR2
+      * LOAD TRANSACTION LIMIT RELATIONSHIP PARAMETER
+     C                   IF        NOT %OPEN(STPAR3)
+     C                   OPEN      STPAR3
+     C                   ENDIF
+      *
+     C                   Z-ADD     *ZEROS        XCNT
+     C     *LOVAL        SETLL     RSTPAR3
+     C                   READ      RSTPAR3
+     C                   DOW       NOT %EOF
+     C                   ADD       1             XCNT
+     C                   MOVEL(P)  P3APPL        K3APPL
+     C                   Z-ADD     P3TLTX        K3TLTX
+     C                   MOVEL(P)  P3STYP        K3STYP
+     C                   Z-ADD     P3LINE        K3LINE
+     C                   Z-ADD     P3TRANCD      K3TRANCD
+     C                   MOVEL(P)  P3DORC        K3DORC
+     C                   MOVEL(P)  KYSTPAR3      ARPAR3KY(XCNT)
+     C                   MOVEL(P)  P3TGRP        ARP3TGRP(XCNT)
+     C                   MOVEL(P)  P3SIGN        ARP3SIGN(XCNT)
+     C                   READ      RSTPAR3
+     C                   ENDDO
+     C                   CLOSE     STPAR3
+      * LOAD TRANSACTION CHANNEL GROUP PARAMETER
+     C                   IF        NOT %OPEN(STPAR4)
+     C                   OPEN      STPAR4
+     C                   ENDIF
+      *
+     C                   Z-ADD     *ZEROS        XCNT
+     C     *LOVAL        SETLL     RSTPAR4
+     C                   READ      RSTPAR4
+     C                   DOW       NOT %EOF
+     C                   ADD       1             XCNT
+     C                   MOVEL(P)  P4CHNCOD      K4CHNCOD
+     C                   MOVEL(P)  KYSTPAR4      ARPAR4KY(XCNT)
+     C                   MOVEL(P)  P4CHNGRP      ARP4CHNG(XCNT)
+     C                   READ      RSTPAR4
+     C                   ENDDO
+     C                   CLOSE     STPAR4
+      * LOAD TRANSACTION LIMIT RULE PARAMETER
+     C                   IF        NOT %OPEN(STPAR5)
+     C                   OPEN      STPAR5
+     C                   ENDIF
+      *
+     C                   Z-ADD     *ZEROS        XCNT
+     C     *LOVAL        SETLL     RSTPAR5
+     C                   READ      RSTPAR5
+     C                   DOW       NOT %EOF
+     C                   ADD       1             XCNT
+     C                   MOVEL(P)  P5RULE        K5RULE
+     C                   MOVEL(P)  P5CURR        K5CURR
+     C                   MOVEL(P)  KYSTPAR5      ARPAR5KY(XCNT)
+     C                   EVAL      ARP5ALWOVR(XCNT) = P5ALWOVR
+     C                   EVAL      ARP5MAXAMT(XCNT) = P5MAXAMT
+     C                   EVAL      ARP5MINAMT(XCNT) = P5MINAMT
+     C                   EVAL      ARP5CNT01(XCNT) = P5CNT01
+     C                   EVAL      ARP5AMT01(XCNT) = P5AMT01
+     C                   EVAL      ARP5CNT02(XCNT) = P5CNT02
+     C                   EVAL      ARP5AMT02(XCNT) = P5AMT02
+     C                   EVAL      ARP5CNT03(XCNT) = P5CNT03
+     C                   EVAL      ARP5AMT03(XCNT) = P5AMT03
+     C                   EVAL      ARP5CNT04(XCNT) = P5CNT04
+     C                   EVAL      ARP5AMT04(XCNT) = P5AMT04
+     C                   READ      RSTPAR5
+     C                   ENDDO
+     C                   CLOSE     STPAR5
+      * LOAD RULE DIMENSION PARAMETER
+     C                   IF        NOT %OPEN(STPAR6)
+     C                   OPEN      STPAR6
+     C                   ENDIF
+      *
+     C                   Z-ADD     *ZEROS        XCNT
+     C     *LOVAL        SETLL     RSTPAR6
+     C                   READ      RSTPAR6
+     C                   DOW       NOT %EOF
+     C                   ADD       1             XCNT
+     C                   MOVEL(P)  P6TGRP        K6TGRP
+     C                   MOVEL(P)  P6CHNGRP      K6CHNGRP
+     C                   MOVEL(P)  KYSTPAR6      ARPAR6KY(XCNT)
+     C                   MOVEL(P)  P6DIMEN       ARPAR6K2(XCNT)
+     C                   MOVEL(P)  P6RULE        ARP6RULE(XCNT)
+     C                   MOVEL(P)  P6DDSC        ARP6DDSC(XCNT)
+     C                   READ      RSTPAR6
+     C                   ENDDO
+     C                   CLOSE     STPAR6
+mbz01 * LOAD TRANSACTION ERROE DESCRIPTION PARAMETER
+mbz01C                   IF        NOT %OPEN(STPAR7)
+mbz01C                   OPEN      STPAR7
+mbz01C                   ENDIF
+mbz01 *
+mbz01C                   Z-ADD     *ZEROS        XCNT
+mbz01C     *LOVAL        SETLL     RSTPAR7
+mbz01C                   READ      RSTPAR7
+mbz01C                   DOW       NOT %EOF
+mbz01C                   ADD       1             XCNT
+mbz01C                   MOVEL(P)  P7RULE        K7RULE
+mbz01C                   Z-ADD     P7ERRN        K7ERRN
+mbz01C                   MOVEL(P)  KYSTPAR7      ARPAR7KY(XCNT)
+mbz01C                   MOVEL(P)  P7ERRD        ARP7ERRD(XCNT)
+mbz01C                   READ      RSTPAR7
+mbz01C                   ENDDO
+mbz01C                   CLOSE     STPAR7
+      * LOAD MAX RECORDS FOR LOG FILE
+     C                   IF        NOT %OPEN(SSPART)
+     C                   OPEN      SSPART
+     C                   ENDIF
+     C     XSTLOGNUM     CHAIN     RSSPART
+     C                   IF        %FOUND
+     C                   MOVEL(P)  STDFTV        XMAXRCD
+     C                   ELSE
+     C                   Z-ADD     999999999     XMAXRCD
+     C                   ENDIF
+     C                   CLOSE     SSPART
+      * LOAD ERROR CODE
+     C                   IF        NOT %OPEN(SSEDT)
+     C                   OPEN      SSEDT
+     C                   ENDIF
+     C                   DOW       NOT %EOF(SSEDT)
+     C                   READ      RSSEDT                                 33
+     C                   Z-ADD     ERRN          XCNT
+     C                   MOVE      ERRDSP        ERD(XCNT)
+     C                   ENDDO
+     C                   CLOSE     SSEDT
+      *
+     C                   ENDSR
+      *
+      *********************************************************
+      *    *PSSR - EXCEPTION HANDLING SUBROUTINE              *
+      *********************************************************
+     C     *PSSR         BEGSR
+      * UNLOCK RECORDS IN CASE EXCEPTION CASE HAPPEN
+     C                   UNLOCK    STMAST
+     C                   UNLOCK    STLOG
+     C                   UNLOCK    JHSCTL
+      *
+     C                   IF        XMODULE = *ON
+     C                   MOVEL(P)  '*CANCL'      XRETURN
+     C                   ELSE
+     C                   MOVEL(P)  '*DETL'       XRETURN
+     C                   ENDIF
+     C                   ENDSR     XRETURN
+     C*********************************************************
+     C* COPY BOOK                                             *
+     C*********************************************************
+     C/COPY QRPGLESRC,¥DBCSC
