@@ -40,6 +40,8 @@
       *                               K3STYP/K4CHNCOD after loop exact STYP/CHNCOD)
       *                          (3) When mode=P, STLOG.SLALWOVR is logged wrongly.
       *                              Need to get VP5ALWOVR from STMAST again.
+      * 21/08/2024  OHC  OHC02   BQD TechOne-123456: 123
+      * 21/08/2024  OHC  OHC02   BQD TechOne-987654: 123     
       ****************************************************************
      F*---PARM
      FSTPAR2    IF   E           K DISK    PREFIX(P2:2) USROPN
